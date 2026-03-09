@@ -69,7 +69,24 @@ uv sync --extra dev
 bun run dev
 ```
 
-Open the Gradio URL printed in the terminal.
+Open the Gradio URL printed in the terminal. The app prefers `0.0.0.0:7860` and will automatically move to the next open port if `7860` is already in use. You can still force a starting port with `PORT=7861 bun run dev`.
+
+On Lightning, prefer the `Lightning preview URL:` printed at startup over the raw `litng.ai` port subdomain.
+
+## Headless C-RADIOv4 Run
+
+If you want actual model-backed outputs without the Gradio surface, use the headless runner:
+
+```bash
+python3 scripts/run_radio_headless.py "path/to/video.mp4" --start 0 --end 0.12 --dancers 2 --profile balanced --device cpu
+```
+
+Notes:
+
+- The headless runner uses `CRADIOV4_MODEL_ID=nvidia/C-RADIOv4-SO400M` by default.
+- Override the model with `--model-id nvidia/C-RADIOv4-H` if your runtime can support it.
+- Outputs are written under `artifacts/runs/<timestamp>/` as `annotated.mp4`, `preview.jpg`, and `analysis.json`.
+- In the current Lightning VM, CUDA may not be exposed even when PyTorch has CUDA support installed. If `torch.cuda.is_available()` is `False`, use `--device cpu`.
 
 ## Runtime profiles
 
@@ -83,10 +100,10 @@ Profiles are defined in [configs/runtime_profiles.json](/teamspace/studios/this_
 
 The baseline pipeline is runnable without heavyweight weights. Model-backed integration points already exist:
 
-- `CRadioV4Adapter`: shared visual backbone seam for local C-RADIOv4 embeddings
+- `CRadioV4Adapter`: shared visual backbone seam for local C-RADIOv4 embeddings, with optional Hugging Face loading through `CRADIOV4_MODEL_ID`
 - `SapiensPoseAdapter`: helper pose/part-analysis seam for higher-quality articulation estimates
 
-Adapters are optional. If model weights are unavailable, the workbench falls back to contour-based proposals and proxy joints while preserving the same structured outputs.
+Adapters are optional. If model weights are unavailable, the workbench falls back to contour-based proposals and proxy joints while preserving the same structured outputs. When `CRADIOV4_MODEL_ID` is set and the dependencies are available, the tracker uses real C-RADIOv4 crop embeddings to improve assignment stability.
 
 ## Ingredients and Experiments
 
@@ -97,3 +114,4 @@ The exact implementation ingredients and the experiment matrix for baseline, run
 - COM is a 2D proxy derived from joints and anthropometric weights, not a lab-grade estimate.
 - Beat scoring is basic and confidence-aware. If no usable audio can be extracted, the app reports a warning and skips authoritative scoring.
 - The annotated preview focuses on clarity and debug visibility over polished presentation.
+- The current repo does not yet include SAM3-based text or box-prompt segmentation. The shipped headless path is C-RADIOv4-backed tracking plus overlay rendering.

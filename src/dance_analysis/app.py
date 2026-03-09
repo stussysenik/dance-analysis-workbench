@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import os
+import socket
 from pathlib import Path
 
 import gradio as gr
@@ -10,6 +12,9 @@ from dance_analysis.pipeline import DanceAnalysisPipeline
 
 
 OVERLAY_CHOICES = ["boxes", "skeleton", "com", "beats"]
+DEFAULT_SERVER_NAME = os.getenv("HOST", "0.0.0.0")
+DEFAULT_SERVER_PORT = int(os.getenv("PORT", "7860"))
+PORT_SCAN_LIMIT = 20
 
 
 def build_app() -> gr.Blocks:
@@ -102,4 +107,34 @@ def build_app() -> gr.Blocks:
 
 
 def launch() -> None:
-    build_app().launch()
+    server_port = _resolve_server_port(DEFAULT_SERVER_NAME, DEFAULT_SERVER_PORT)
+    lightning_preview_url = _lightning_preview_url(server_port)
+    if lightning_preview_url:
+        print(f"Lightning preview URL: {lightning_preview_url}")
+    build_app().launch(server_name=DEFAULT_SERVER_NAME, server_port=server_port)
+
+
+def _resolve_server_port(server_name: str, preferred_port: int) -> int:
+    for candidate in range(preferred_port, preferred_port + PORT_SCAN_LIMIT):
+        if _port_is_available(server_name, candidate):
+            if candidate != preferred_port:
+                print(f"Port {preferred_port} is busy; using {candidate} instead.")
+            return candidate
+    raise OSError(f"Could not find an open port in range {preferred_port}-{preferred_port + PORT_SCAN_LIMIT - 1}")
+
+
+def _port_is_available(server_name: str, port: int) -> bool:
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
+        sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        try:
+            sock.bind((server_name, port))
+        except OSError:
+            return False
+    return True
+
+
+def _lightning_preview_url(port: int) -> str | None:
+    vscode_proxy_uri = os.getenv("VSCODE_PROXY_URI", "")
+    if "{{port}}" in vscode_proxy_uri:
+        return vscode_proxy_uri.replace("{{port}}", str(port))
+    return None

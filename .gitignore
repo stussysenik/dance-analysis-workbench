@@ -17,6 +17,10 @@ __pycache__/
 .windsurf-server
 .zed_server/
 artifacts/runs/
+.codex/
+.claude.json
+*.mp4
+*.m4a
 *.pyc
 *.pyo
 *.pyd

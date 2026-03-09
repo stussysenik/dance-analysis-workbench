@@ -8,7 +8,8 @@ import cv2
 import numpy as np
 
 from dance_analysis.contracts import AnalyzeVideoRequest, SegmentSelection
-from dance_analysis.pipeline import DanceAnalysisPipeline
+from dance_analysis.contracts import BoundingBox, Point
+from dance_analysis.pipeline import DanceAnalysisPipeline, _assign_boxes
 
 
 def _write_test_video(path: Path, frame_count: int = 36) -> None:
@@ -59,3 +60,27 @@ def test_pipeline_analyzes_synthetic_video(tmp_path: Path) -> None:
     assert result.render_bundle.annotated_video_path.exists()
     assert result.render_bundle.json_path.exists()
     assert result.music.bpm > 0
+
+
+def test_assign_boxes_prefers_appearance_when_features_exist() -> None:
+    left = BoundingBox(x=10, y=10, width=40, height=120)
+    right = BoundingBox(x=200, y=10, width=40, height=120)
+    previous_centers = [Point(x=20, y=40), Point(x=220, y=40)]
+    previous_features = [
+        np.asarray([1.0, 0.0], dtype=np.float32),
+        np.asarray([0.0, 1.0], dtype=np.float32),
+    ]
+    candidate_features = [
+        np.asarray([0.0, 1.0], dtype=np.float32),
+        np.asarray([1.0, 0.0], dtype=np.float32),
+    ]
+
+    assigned, _ = _assign_boxes(
+        candidates=[left, right],
+        previous_centers=previous_centers,
+        target_dancers=2,
+        previous_features=previous_features,
+        candidate_features=candidate_features,
+    )
+
+    assert assigned == [right, left]

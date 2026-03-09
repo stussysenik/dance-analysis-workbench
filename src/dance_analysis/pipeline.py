@@ -8,6 +8,7 @@ import wave
 from collections import defaultdict
 from datetime import UTC, datetime
 from pathlib import Path
+from typing import TypeAlias
 
 import cv2
 import numpy as np
@@ -37,6 +38,7 @@ JOINT_WEIGHTS = {
     "foot_l": 0.05,
     "foot_r": 0.05,
 }
+FeatureVector: TypeAlias = np.ndarray
 
 
 class DanceAnalysisPipeline:
@@ -70,6 +72,7 @@ class DanceAnalysisPipeline:
             threshold=profile.detection_threshold,
             stability_threshold=profile.track_stability_threshold,
             correction_hints=request.correction_hints,
+            backbone=self.backbone if profile.prefer_model_adapters else None,
         )
         poses = _estimate_poses(tracks, self.pose_adapter)
         biomechanics = _score_biomechanics(poses)
@@ -163,19 +166,30 @@ def _track_dancers(
     threshold: float,
     stability_threshold: float,
     correction_hints: str,
+    backbone: CRadioV4Adapter | None = None,
 ) -> list[TrackRecord]:
     seeded_centers = _parse_seed_centers(correction_hints)
     history: dict[int, list[TrackFrame]] = {i: [] for i in range(target_dancers)}
     warnings: dict[int, list[str]] = defaultdict(list)
 
     previous_centers = seeded_centers
+    previous_features: list[FeatureVector | None] = [None] * target_dancers
+    use_backbone = bool(backbone and backbone.status().available)
     for frame, frame_index, timestamp in zip(frames, frame_indices, timestamps, strict=False):
         candidates = _detect_people_boxes(frame, target_dancers, threshold)
         if not candidates:
             height, width = frame.shape[:2]
             candidates = [BoundingBox(x=width // 4, y=height // 8, width=width // 2, height=int(height * 0.8))]
-        assignments = _assign_boxes(candidates, previous_centers, target_dancers)
+        candidate_features = [backbone.extract_features(frame, box) for box in candidates] if use_backbone else None
+        assignments, assignment_features = _assign_boxes(
+            candidates,
+            previous_centers,
+            target_dancers,
+            previous_features=previous_features,
+            candidate_features=candidate_features,
+        )
         current_centers: list[Point] = []
+        current_features: list[FeatureVector | None] = []
         for slot, box in enumerate(assignments):
             confidence = _box_confidence(box, frame.shape[:2])
             unstable = confidence < stability_threshold
@@ -189,9 +203,11 @@ def _track_dancers(
                 )
             )
             current_centers.append(box.centroid)
+            current_features.append(assignment_features[slot] if slot < len(assignment_features) else None)
             if unstable:
                 warnings[slot].append(f"Low-confidence track near {timestamp:.2f}s")
         previous_centers = current_centers
+        previous_features = current_features
 
     return [
         TrackRecord(dancer_id=f"dancer_{slot + 1}", frames=frames_for_track, warnings=warnings[slot])
@@ -228,23 +244,58 @@ def _parse_seed_centers(correction_hints: str) -> list[Point]:
     return points
 
 
-def _assign_boxes(candidates: list[BoundingBox], previous_centers: list[Point], target_dancers: int) -> list[BoundingBox]:
+def _assign_boxes(
+    candidates: list[BoundingBox],
+    previous_centers: list[Point],
+    target_dancers: int,
+    previous_features: list[FeatureVector | None] | None = None,
+    candidate_features: list[FeatureVector] | None = None,
+) -> tuple[list[BoundingBox], list[FeatureVector | None]]:
     assigned: list[BoundingBox] = []
-    remaining = candidates[:]
+    assigned_features: list[FeatureVector | None] = []
+    remaining = list(enumerate(candidates))
     for slot in range(target_dancers):
         if previous_centers and slot < len(previous_centers) and remaining:
             remaining.sort(
-                key=lambda box: (
-                    (box.centroid.x - previous_centers[slot].x) ** 2
-                    + (box.centroid.y - previous_centers[slot].y) ** 2
+                key=lambda item: _assignment_cost(
+                    candidate=item[1],
+                    previous_center=previous_centers[slot],
+                    previous_feature=previous_features[slot] if previous_features and slot < len(previous_features) else None,
+                    candidate_feature=candidate_features[item[0]] if candidate_features else None,
                 )
             )
-            assigned.append(remaining.pop(0))
+            index, candidate = remaining.pop(0)
+            assigned.append(candidate)
+            assigned_features.append(candidate_features[index] if candidate_features else None)
         elif remaining:
-            assigned.append(remaining.pop(0))
+            index, candidate = remaining.pop(0)
+            assigned.append(candidate)
+            assigned_features.append(candidate_features[index] if candidate_features else None)
     while len(assigned) < target_dancers:
         assigned.append(assigned[-1] if assigned else BoundingBox(x=0, y=0, width=32, height=32))
-    return assigned
+        assigned_features.append(assigned_features[-1] if assigned_features else None)
+    return assigned, assigned_features
+
+
+def _assignment_cost(
+    candidate: BoundingBox,
+    previous_center: Point,
+    previous_feature: FeatureVector | None,
+    candidate_feature: FeatureVector | None,
+) -> tuple[float, float]:
+    appearance_cost = _appearance_distance(previous_feature, candidate_feature)
+    spatial_cost = (candidate.centroid.x - previous_center.x) ** 2 + (candidate.centroid.y - previous_center.y) ** 2
+    return appearance_cost, spatial_cost
+
+
+def _appearance_distance(previous_feature: FeatureVector | None, candidate_feature: FeatureVector | None) -> float:
+    if previous_feature is None or candidate_feature is None:
+        return 1.0
+    denom = float(np.linalg.norm(previous_feature) * np.linalg.norm(candidate_feature))
+    if denom <= 0:
+        return 1.0
+    similarity = float(np.dot(previous_feature, candidate_feature) / denom)
+    return 1.0 - similarity
 
 
 def _box_confidence(box: BoundingBox, frame_shape: tuple[int, int]) -> float:
