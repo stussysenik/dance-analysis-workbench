@@ -1,5 +1,8 @@
 # Dance Analysis Workbench
 
+![Demo](demo.gif)
+
+
 ![Tests](https://img.shields.io/badge/tests-passing-brightgreen)
 ![Python](https://img.shields.io/badge/python-3.12%2B-blue)
 ![Bun](https://img.shields.io/badge/bun-1.3.10-black)
